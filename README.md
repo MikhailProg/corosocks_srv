@@ -2,7 +2,7 @@
 
 A small SOCKS5 server based on coroutines. The server uses coroutine and event libraries to emulate blocking IO. The server supports only CONNECT command without authentication.
 
-This server is not about SOCKS5 and even not about the server. It is about coroutines and how to write the code in blocking style but use unblocking calls without usual callbacks.
+This server is not about SOCKS5 and even not about the server. It is about coroutines and how to write the code in blocking style but use nonblocking calls and no usual callbacks.
 
 ## Build
 
