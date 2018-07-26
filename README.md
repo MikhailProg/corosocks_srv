@@ -24,8 +24,10 @@ usage: corosocks_srv [io_drv] [bind_addr] [bind_port]
 $ ./corosocks_srv poll 0.0.0.0 1080
  
 ```
+Set 127.0.0.1:1080 as the SOCKS5 server in your browser (e.g Firefox).
 
-Run as a daemon:
+
+Run as a daemon (setsid is available only in Linux):
 
 ```
 $ (wd=$PWD; cd /; setsid $wd/corosocks_srv poll 0.0.0.0 1081 </dev/null >/dev/null 2>/dev/null) &
