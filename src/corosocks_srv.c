@@ -26,6 +26,22 @@
 #define ADDR		"0.0.0.0"
 #define PORT		"1080"
 
+#define STRINIT(s, a1, a2)      ((s)->p = (a1), (s)->n = (a2))
+#define STREQU(s1, s2)          ((s1)->n == (s2)->n && \
+					!memcmp((s1)->p, (s2)->p, (s1)->n))
+typedef struct {
+	char	*p;
+	size_t 	n;
+} Str;
+
+static struct {
+	Str	user;
+	Str	pass;
+} socks5_auth_user;
+
+static int (*socks5_auth_methods[256])(Fd);
+static int socks5_auth_type;
+
 static int fd_nonblock(Fd fd)
 {
 	int flags = fcntl(fd, F_GETFL);
@@ -228,6 +244,50 @@ static ssize_t coro_send_all(int fd, const void *buf, size_t len, int flags)
 	return m;
 }
 
+static int socks5_auth_noauth(Fd fd)
+{
+	UNUSED(fd);
+	return 0;
+}
+
+static int socks5_auth_username(Fd fd)
+{
+	/* ver 1 byte | ulen 1 byte | user | plen 1 byte | pass */
+	unsigned char buf[513];
+	Str user, pass;
+	size_t ulen, plen;
+	ssize_t n;
+	int ok = 0;
+
+	if ((n = coro_recv(fd, buf, sizeof(buf), 0)) < 0)
+		return -1;
+	/* Sanity checks. */
+	if (n < 5 || buf[0] != 1)
+		goto out;
+	n -= 3;
+	if (!(ulen = buf[1]) || ulen >= (size_t)n)
+		goto out;
+	n -= ulen;
+	if (!(plen = buf[2+ulen]) || plen > (size_t)n)
+		goto out;
+
+	STRINIT(&user, (char *)&buf[2], ulen);
+	STRINIT(&pass, (char *)&buf[2+ulen+1], plen);
+
+	if (STREQU(&socks5_auth_user.user, &user) &&
+	    STREQU(&socks5_auth_user.pass, &pass))
+		ok = 1;
+out:
+	WARNX("ok ? %s", ok ? "yes" : "no");
+	buf[0] = 1;
+	buf[1] = ok ? 0 : 1;
+
+	if (coro_send_all(fd, buf, 2, 0) < 0)
+		return -1;
+
+	return ok ? 0 : -1;
+}
+
 static int socks5_negotiate(Fd fd)
 {
 	unsigned char buf[1024], *p = buf;
@@ -243,11 +303,11 @@ static int socks5_negotiate(Fd fd)
 		return -1;
 	p += 2;
 	for (i = 0; i < n; i++)
-		if (p[i] == SOCKS5_AUTH_NOAUTH)
+		if (p[i] == socks5_auth_type)
 			break;
 	ok = i != n;
 	buf[0] = SOCKS5;
-	buf[1] = ok ? SOCKS5_AUTH_NOAUTH : SOCKS5_AUTH_NOMETHOD;
+	buf[1] = ok ? socks5_auth_type : SOCKS5_AUTH_NOMETHOD;
 	if (coro_send_all(fd, buf, 2, 0) < 0)
 		return -1;
 	if (ok)
@@ -368,13 +428,14 @@ static void socks5_entry(void *opaque)
 {
 	int afd = (intptr_t)opaque, cfd;
 	int fds[2][2] = { { afd, -1 }, { -1, -1} };
+	int (*socks5_auth)(Fd) = socks5_auth_methods[socks5_auth_type];
 	Coroutine *co;
 
 	/* The idea is to establish the connection with the remote side.
 	 * And then do data exchange in two coroutines, both coroutines
 	 * use the same function for IO (rdwr_loop). The first should
 	 * read from AFD to CFD, the second from CFD to AFD. */
-	if (socks5_negotiate(afd) < 0 ||
+	if (socks5_negotiate(afd) < 0 || socks5_auth(afd) < 0 ||
 		(fds[0][1] = cfd = socks5_request(afd)) < 0 ||
 			(fds[1][0] = dup(cfd)) < 0 ||
 	    		(fds[1][1] = dup(afd)) < 0 || 
@@ -424,6 +485,25 @@ static void srv_loop(void *opaque)
 		coroutine_detach(co);
 		coroutine_resume(co);
 	}
+}
+
+static void socks5_auth_init(void)
+{
+	char *u, *p; 
+	size_t ulen, plen;
+
+	socks5_auth_methods[SOCKS5_AUTH_NOAUTH]   = socks5_auth_noauth;
+	socks5_auth_methods[SOCKS5_AUTH_USERNAME] = socks5_auth_username;
+
+	socks5_auth_type = SOCKS5_AUTH_NOAUTH;
+
+	if ((u = getenv("PROXY_USER")) &&
+		(p = getenv("PROXY_PASSWD")) &&  
+			(ulen = strlen(u)) && (plen = strlen(p))) {
+		socks5_auth_type = SOCKS5_AUTH_USERNAME;
+		STRINIT(&socks5_auth_user.user, u, ulen);
+		STRINIT(&socks5_auth_user.pass, p, plen);
+	}   
 }
 
 static void sigall(int signo)
@@ -478,6 +558,7 @@ int main(int argc, char *argv[])
 	addr = argc > 2 ? argv[2] : ADDR;
 	port = argc > 3 ? argv[3] : PORT;
 
+	socks5_auth_init();
 	memset(&sa, 0, sizeof(sa));
 	sigfillset(&sa.sa_mask);
 	sa.sa_handler = sigall;
