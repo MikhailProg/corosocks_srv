@@ -152,7 +152,7 @@ coroutine_create(size_t _stacksz, void (*entry)(void *), void *opaque)
 
 	co->callee = current;
 	current    = co;
-	/* Jump back to sigusr1() but now not in signal context. */
+	/* Jump back to sigusr1() but this time not in the signal context. */
 	if (sigsetjmp(co->callee->env, 0) == 0)
 		siglongjmp(co->env, 1);
 	current    = co->callee;

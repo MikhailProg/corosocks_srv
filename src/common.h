@@ -8,8 +8,9 @@
 				errno == EWOULDBLOCK)
 #define UNUSED(x)	((x) = (x))
 
-/* Comment this define to disasble messages. */
-#define WARN_DEBUG
+#ifndef SILENT
+#  define WARN_DEBUG
+#endif
 
 #ifdef WARN_DEBUG
 #  define WARN(...)	warn(__VA_ARGS__)

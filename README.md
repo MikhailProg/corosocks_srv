@@ -10,6 +10,18 @@ This server is not about SOCKS5 and even not about the server. It is about corou
 $ make
 ```
 
+Disable messages:
+
+```
+$ make SILENT=1
+```
+
+Static build:
+
+```
+$ LDFLAGS=-static make 
+```
+
 ## Usage and run
 
 ```
@@ -36,7 +48,7 @@ $ PROXY_USER=user PROXY_PASSWD=passwd ./corosocks_srv poll 0.0.0.0 1080
 Run as a daemon (setsid is available only in Linux):
 
 ```
-$ (wd=$PWD; cd /; setsid $wd/corosocks_srv poll 0.0.0.0 1081 </dev/null >/dev/null 2>/dev/null) &
+$ (wd=$PWD; cd /; setsid $wd/corosocks_srv poll 0.0.0.0 1081 </dev/null >/dev/null 2>&1 &) &
 
 ```
 

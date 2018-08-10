@@ -1,4 +1,4 @@
-CFLAGS := -pipe -Wall -Wextra -D_FORTIFY_SOURCE=0
+CFLAGS := -pipe -Wall -Wextra
 OS     := $(shell uname -s)
 TARGET := corosocks_srv
 
@@ -30,14 +30,19 @@ libloop.a: libloop.a(loop.o)
 inet.o: inet.c inet.h
 libinet.a: libinet.a(inet.o)
 
+coroutine.o: CFLAGS += -D_FORTIFY_SOURCE=0 -Wno-clobbered
 coroutine.o: coroutine.c coroutine.h
 libcoro.a: libcoro.a(coroutine.o)
 
 passfd.o: passfd.c passfd.h
 libpassfd.a: libpassfd.a(passfd.o)
 
+ifdef SILENT
+corosocks_srv.o: CFLAGS += -DSILENT
+endif
 corosocks_srv.o: corosocks_srv.c common.h socks5.h \
 		libloop.a libinet.a libcoro.a libpassfd.a
+
 corosocks_srv: LDLIBS  += -lloop -lcoro -linet -lpassfd
 corosocks_srv: LDFLAGS += -L.
 

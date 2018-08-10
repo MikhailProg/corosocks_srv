@@ -278,7 +278,6 @@ static int socks5_auth_username(Fd fd)
 	    STREQU(&socks5_auth_user.pass, &pass))
 		ok = 1;
 out:
-	WARNX("ok ? %s", ok ? "yes" : "no");
 	buf[0] = 1;
 	buf[1] = ok ? 0 : 1;
 
