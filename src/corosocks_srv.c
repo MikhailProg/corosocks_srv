@@ -12,6 +12,7 @@
 #include <signal.h>
 #include <string.h>
 #include <fcntl.h>
+#include <paths.h>
 #include <poll.h>
 #include <errno.h>
 
@@ -505,6 +506,20 @@ static void socks5_auth_init(void)
 	}   
 }
 
+static void stdxyz_init(void)
+{
+	int null;
+
+	if (!getenv("DEV_NULL"))
+		return;
+	if ((null = open(_PATH_DEVNULL, O_RDWR)) < 0)
+		return;
+	dup2(null, STDIN_FILENO);
+	dup2(null, STDOUT_FILENO);
+	dup2(null, STDERR_FILENO);
+	close(null);	
+}
+
 static void sigall(int signo)
 {
 	if (signo == SIGCHLD)
@@ -557,7 +572,6 @@ int main(int argc, char *argv[])
 	addr = argc > 2 ? argv[2] : ADDR;
 	port = argc > 3 ? argv[3] : PORT;
 
-	socks5_auth_init();
 	memset(&sa, 0, sizeof(sa));
 	sigfillset(&sa.sa_mask);
 	sa.sa_handler = sigall;
@@ -573,6 +587,9 @@ int main(int argc, char *argv[])
 		ERR(EXIT_FAILURE, "fd_nonblock() failed");
 	if (loop_init(drv) < 0)
 		ERRX(EXIT_FAILURE, "loop_init() failed");
+
+	socks5_auth_init();
+	stdxyz_init();
 
 	srv = coroutine_create(0, srv_loop, (void *)(intptr_t)fd);
 	coroutine_resume(srv);
