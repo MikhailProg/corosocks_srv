@@ -52,3 +52,38 @@ $ (wd=$PWD; cd /; setsid $wd/corosocks_srv poll 0.0.0.0 1081 </dev/null >/dev/nu
 
 ```
 
+
+## Building in Docker (Linux/OSX)
+
+`cd` into repo dir
+```
+docker build --target builder -t corosocks-binary .
+docker run --rm -v $(PWD):/tempdir/ corosocks-binary cp /usr/src/corosocks/corosocks_srv /tempdir/
+```
+
+## Running in Docker
+
+Without authorization interactive
+```
+docker run -p 1080:1080 --name corosocks mikhailprog/corosocks_srv/
+```
+
+Without authorization on custom port 3000
+```
+docker run -p 3000:1080 --name corosocks mikhailprog/corosocks_srv/
+```
+
+Without authorization daemonized
+```
+docker run -d -p 1080:1080 --name corosocks mikhailprog/corosocks_srv/
+```
+
+With authorization daemonized
+```
+docker run -d -p 1080:1080 -e PROXY_USER='user' -e PROXY_PASSWD='passwd' --name corosocks mikhailprog/corosocks_srv/:latest
+```
+
+To stop daemonized container
+```
+docker rm -f corosocks
+```
