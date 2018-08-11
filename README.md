@@ -1,3 +1,5 @@
+[![Docker Build](https://img.shields.io/docker/build/mikchailprog/corosocks_srv.svg?maxAge=604800)][hub]
+
 # SOCKS5 server (use coroutines)
 
 A small SOCKS5 server based on coroutines. The server uses coroutine and event libraries to emulate blocking IO. The server supports only CONNECT command.
