@@ -66,12 +66,12 @@ $ docker run --rm -v $(PWD):/tempdir/ corosocks-binary cp /usr/src/corosocks/cor
 
 Without authorization interactive.
 ```
-$ docker run -p 3000:1080 --name corosocks mikhailprog/corosocks_srv/
+$ docker run -p 3000:1080 --name corosocks mikhailprog/corosocks_srv
 ```
 
 Without authorization daemonized.
 ```
-$ docker run -d -p 1080:1080 --name corosocks mikhailprog/corosocks_srv/
+$ docker run -d -p 1080:1080 --name corosocks mikhailprog/corosocks_srv
 ```
 
 With authorization daemonized.
