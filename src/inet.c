@@ -83,7 +83,7 @@ int inet_listen(const char *proto, const char *host, const char *port)
 			goto err;
 		if (bind(fd, iter->ai_addr, iter->ai_addrlen) < 0)
 			goto err;
-		if (!dgram && listen(fd, 4096) < 0)
+		if (!dgram && listen(fd, SOMAXCONN) < 0)
 			goto err;
 		break;
 err:

@@ -26,6 +26,9 @@
 #define CONNECT_TIMEOUT	5000
 #define ADDR		"0.0.0.0"
 #define PORT		"1080"
+#define PROXY_USER_IP	"PROXY_USER_IP"
+#define PROXY_USER	"PROXY_USER"
+#define PROXY_PASS	"PROXY_PASS"
 
 #define STRINIT(s, a1, a2)      ((s)->p = (a1), (s)->n = (a2))
 #define STREQU(s1, s2)          ((s1)->n == (s2)->n && \
@@ -35,13 +38,22 @@ typedef struct {
 	size_t 	n;
 } Str;
 
-static struct {
-	Str	user;
-	Str	pass;
-} socks5_auth_user;
+typedef struct {
+	const char	*ip;
+	const Str	*u;
+	const Str	*p;
+} Socks5Auth;
 
-static int (*socks5_auth_methods[256])(Fd);
-static int socks5_auth_type;
+typedef struct {
+	const char	*host;
+	const char	*port;
+} ConnectOpt;
+
+static int	socks5_auth_type;
+static Str	socks5_user;
+static Str	socks5_pass;
+static char	**socks5_auth_prog;
+static int	(*socks5_auth_methods[256])(Fd);
 
 static int fd_nonblock(Fd fd)
 {
@@ -87,6 +99,12 @@ static ssize_t coro_recv(int fd, void *buf, size_t len, int flags)
 	return coro_io(recv, LOOP_RD, fd, buf, len, flags);
 }
 
+static ssize_t coro_read(int fd, void *buf, size_t len)
+{
+	return coro_io((ssize_t (*)(int, void *, size_t, int))read,
+			LOOP_RD, fd, buf, len, 0);
+}
+
 static int coro_accept(int fd, struct sockaddr *addr, socklen_t *addrlen)
 {
 	int afd;
@@ -102,6 +120,47 @@ static int coro_accept(int fd, struct sockaddr *addr, socklen_t *addrlen)
 	}
 
 	return afd;
+}
+
+static int chld_run(void (*run)(Fd fd, void *opaque), void *opaque)
+{
+	sigset_t mask, omask;
+	struct rlimit rlim;
+	int i, fds[2];
+
+	UNUSED(rlim);
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) < 0)
+		return -1;
+
+	sigfillset(&mask);
+	sigprocmask(SIG_BLOCK, &mask, &omask);
+
+	switch (fork()) {
+	case -1:
+		sigprocmask(SIG_SETMASK, &omask, NULL);
+		close(fds[0]);
+		close(fds[1]);
+		return -1;
+	case  0:
+		close(fds[0]);
+#if 0
+		if (getrlimit(RLIMIT_NOFILE, &rlim) < 0)
+			_exit(EXIT_FAILURE);
+		for (i = 3; i < (int)rlim.rlim_cur; i++)
+			if (fds[1] != i)
+				close(i);
+#endif
+		for (i = 1; i < NSIG; i++)
+			signal(i, SIG_DFL);
+		sigemptyset(&mask);
+		sigprocmask(SIG_SETMASK, &mask, NULL);
+		run(fds[1], opaque);
+		_exit(EXIT_FAILURE);
+	}
+
+	sigprocmask(SIG_SETMASK, &omask, NULL);
+	close(fds[1]);
+	return fds[0];
 }
 
 static int connect_timeout(const char *host, const char *port, int timeout)
@@ -138,7 +197,7 @@ static int connect_timeout(const char *host, const char *port, int timeout)
 		err = errno;
 		WARN("getsockopt");
 	} else if (err) {
-		errno = err; 
+		errno = err;
 		WARN("connect (deferred)");
 	} else {
 		WARNX("fd=%d connected", fd);
@@ -151,53 +210,31 @@ static int connect_timeout(const char *host, const char *port, int timeout)
 	return fd;
 }
 
+static void connector(Fd un, void *opaque)
+{
+	ConnectOpt *opt = opaque;
+	int fd, rc = EXIT_SUCCESS;
+
+	fd = connect_timeout(opt->host, opt->port, CONNECT_TIMEOUT);
+	if (fd < 0 || send_fd(un, fd) < 0)
+		rc = EXIT_FAILURE;
+	_exit(rc);
+}
+
 static int connect_async(const char *host, const char *port)
 {
-	sigset_t mask, omask;
-	int fd, pair[2], i, rc = EXIT_SUCCESS;
-	struct rlimit rlim;
+	ConnectOpt opt = { host, port };
+	int un;
 
-	UNUSED(rlim);
-	if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) < 0)
+	if ((un = chld_run(connector, &opt)) < 0)
 		return -1;
 
-	if (fd_nonblock(pair[0]) < 0)
-		goto err0;
-
-	sigfillset(&mask);
-	sigprocmask(SIG_BLOCK, &mask, &omask);
-
-	switch (fork()) {
-	case -1:
-		goto err1;
-	case  0:
-		close(pair[0]);
-#if 0
-		if (getrlimit(RLIMIT_NOFILE, &rlim) < 0)
-			_exit(EXIT_FAILURE);
-		for (i = 3; i < (int)rlim.rlim_cur; i++)
-			if (pair[1] != i)
-				close(i);
-#endif
-		for (i = 1; i < NSIG; i++)
-			signal(i, SIG_DFL);
-		sigemptyset(&mask);
-		sigprocmask(SIG_SETMASK, &mask, NULL);
-		if ((fd = connect_timeout(host, port, CONNECT_TIMEOUT)) < 0 ||
-				send_fd(pair[1], fd) < 0)
-			rc = EXIT_FAILURE;
-		_exit(rc);
+	if (fd_nonblock(un) < 0) {
+		close(un);
+		return -1;
 	}
 
-	sigprocmask(SIG_SETMASK, &omask, NULL);
-	close(pair[1]);
-	return pair[0];
-err1:
-	sigprocmask(SIG_SETMASK, &omask, NULL);
-err0:
-	close(pair[0]);
-	close(pair[1]);
-	return -1;
+	return un;
 }
 
 static int coro_connect(const char *host, const char *port)
@@ -245,10 +282,75 @@ static ssize_t coro_send_all(int fd, const void *buf, size_t len, int flags)
 	return m;
 }
 
+static void authenticator(Fd un, void *opaque)
+{
+	Socks5Auth *auth = opaque;
+	char user[256], pass[256];
+	int null;
+
+	/* Set user and password variables if they are provided. */
+	if (auth->u && auth->p) {
+		memcpy(user, auth->u->p, auth->u->n);
+		user[auth->u->n] = 0;
+		memcpy(pass, auth->p->p, auth->p->n);
+		pass[auth->p->n] = 0;
+		if (setenv(PROXY_USER, user, 1) < 0 ||
+		    setenv(PROXY_PASS, pass, 1) < 0)
+			_exit(EXIT_FAILURE);
+	}
+	/* Also export a client ip address. */
+	if (setenv(PROXY_USER_IP, auth->ip, 1) < 0  ||
+	    (null = open(_PATH_DEVNULL, O_RDWR)) < 0)
+		_exit(EXIT_FAILURE);
+
+	dup2(null, STDIN_FILENO);
+	dup2(un, STDOUT_FILENO);
+	dup2(null, STDERR_FILENO);
+	close(null);
+	close(un);
+
+	execvp(socks5_auth_prog[0], socks5_auth_prog);
+	_exit(EXIT_FAILURE);
+}
+
+static int autenticate(Fd fd, const Str *u, const Str *p)
+{
+	Socks5Auth auth = { NULL, u, p };
+	struct sockaddr_in sin;
+	socklen_t slen = sizeof(sin);
+	char res[2];
+	int ok = 0;
+	Fd un;
+
+	if (!socks5_auth_prog)
+		return 0;
+	if (getpeername(fd, (struct sockaddr *)&sin, &slen) < 0)
+		return -1;
+
+	auth.ip = inet_ntoa(sin.sin_addr);
+	/* Run an authenticator. */
+	if ((un = chld_run(authenticator, &auth)) < 0)
+		return -1;
+
+	if (fd_nonblock(un) < 0) {
+		close(un);
+		return -1;
+	}
+	/* Expect "y" as a success result. */
+	if (coro_read(un, res, sizeof(res)) == 2) {
+		res[1] = '\0';
+		if (strcmp(res, "y") == 0)
+			ok = 1;
+	}
+
+	close(un);
+	return ok ? 0 : -1;
+}
+
 static int socks5_auth_noauth(Fd fd)
 {
-	UNUSED(fd);
-	return 0;
+	/* With NOAUTH we can check only a client ip address. */
+	return autenticate(fd, NULL, NULL);
 }
 
 static int socks5_auth_username(Fd fd)
@@ -275,9 +377,10 @@ static int socks5_auth_username(Fd fd)
 	STRINIT(&user, (char *)&buf[2], ulen);
 	STRINIT(&pass, (char *)&buf[2+ulen+1], plen);
 
-	if (STREQU(&socks5_auth_user.user, &user) &&
-	    STREQU(&socks5_auth_user.pass, &pass))
+	if (STREQU(&socks5_user, &user) && STREQU(&socks5_pass, &pass))
 		ok = 1;
+	else
+		ok = autenticate(fd, &user, &pass) < 0 ? 0 : 1;
 out:
 	buf[0] = 1;
 	buf[1] = ok ? 0 : 1;
@@ -438,7 +541,7 @@ static void socks5_entry(void *opaque)
 	if (socks5_negotiate(afd) < 0 || socks5_auth(afd) < 0 ||
 		(fds[0][1] = cfd = socks5_request(afd)) < 0 ||
 			(fds[1][0] = dup(cfd)) < 0 ||
-	    		(fds[1][1] = dup(afd)) < 0 || 
+	    		(fds[1][1] = dup(afd)) < 0 ||
 				!(co = coroutine_create(0, rdwr_loop, fds[1]))) {
 		fds_fini(fds[0], fds[1]);
 		return;
@@ -489,21 +592,18 @@ static void srv_loop(void *opaque)
 
 static void socks5_auth_init(void)
 {
-	char *u, *p; 
-	size_t ulen, plen;
+	char *u, *p;
 
 	socks5_auth_methods[SOCKS5_AUTH_NOAUTH]   = socks5_auth_noauth;
 	socks5_auth_methods[SOCKS5_AUTH_USERNAME] = socks5_auth_username;
 
 	socks5_auth_type = SOCKS5_AUTH_NOAUTH;
 
-	if ((u = getenv("PROXY_USER")) &&
-		(p = getenv("PROXY_PASSWD")) &&  
-			(ulen = strlen(u)) && (plen = strlen(p))) {
+	if ((u = getenv(PROXY_USER)) && (p = getenv(PROXY_PASS))) {
 		socks5_auth_type = SOCKS5_AUTH_USERNAME;
-		STRINIT(&socks5_auth_user.user, u, ulen);
-		STRINIT(&socks5_auth_user.pass, p, plen);
-	}   
+		STRINIT(&socks5_user, u, strlen(u));
+		STRINIT(&socks5_pass, p, strlen(p));
+	}
 }
 
 static void stdxyz_init(void)
@@ -531,17 +631,18 @@ static void sigall(int signo)
 static void usage(void)
 {
 	extern const char *const __progname;
-	fprintf(stderr, "\n"
-			"usage: %s [io_drv] [bind_addr] [bind_port]\n"
-			"\n"
-			"    io_drv    : select, poll"
+	fprintf(stderr,
+		"\n"
+		"usage: %s [io_drv] [bind_addr] [bind_port] [authenticator ...]\n"
+		"\n"
+		"    io_drv    : select, poll"
 #ifdef HAVE_EPOLL
-			", epoll"
+		", epoll"
 #endif
-			"\n"
-			"    bind_addr : %s\n"
-			"    bind_port : %s\n"
-			"\n", __progname, ADDR, PORT);
+		"\n"
+		"    bind_addr : %s\n"
+		"    bind_port : %s\n"
+		"\n", __progname, ADDR, PORT);
 	exit(EXIT_FAILURE);
 }
 
@@ -571,6 +672,13 @@ int main(int argc, char *argv[])
 				LOOP_DRV_DEFAULT : LOOP_DRV_DEFAULT;
 	addr = argc > 2 ? argv[2] : ADDR;
 	port = argc > 3 ? argv[3] : PORT;
+
+	if (argc > 3) {
+		if (access(argv[4], X_OK) < 0)
+			ERRX(EXIT_FAILURE, "%s does not exist or "
+					   "isn't executable", argv[4]);
+		socks5_auth_prog = &argv[4];
+	}
 
 	memset(&sa, 0, sizeof(sa));
 	sigfillset(&sa.sa_mask);
