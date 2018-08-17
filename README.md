@@ -47,7 +47,7 @@ Run a server with username/password authentication.
 $ PROXY_USER=user PROXY_PASSWD=passwd ./corosocks_srv poll 0.0.0.0 1080
 ```
 
-Run a server with username/password authentication but deligate a check to external program (check auth.sh for more information):
+Run a server with username/password authentication but deligate a check to an external program (check auth.sh for more information):
 ```
 $ PROXY_USER="" PROXY_PASSWD="" ./corosocks_srv poll 0.0.0.0 1080 ./auth.sh
 ```
