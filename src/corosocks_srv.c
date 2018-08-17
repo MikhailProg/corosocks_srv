@@ -322,8 +322,6 @@ static int autenticate(Fd fd, const Str *u, const Str *p)
 	int ok = 0;
 	Fd un;
 
-	if (!socks5_auth_prog)
-		return 0;
 	if (getpeername(fd, (struct sockaddr *)&sin, &slen) < 0)
 		return -1;
 
@@ -350,7 +348,7 @@ static int autenticate(Fd fd, const Str *u, const Str *p)
 static int socks5_auth_noauth(Fd fd)
 {
 	/* With NOAUTH we can check only a client ip address. */
-	return autenticate(fd, NULL, NULL);
+	return socks5_auth_prog ? autenticate(fd, NULL, NULL) : 0;
 }
 
 static int socks5_auth_username(Fd fd)
@@ -379,7 +377,7 @@ static int socks5_auth_username(Fd fd)
 
 	if (STREQU(&socks5_user, &user) && STREQU(&socks5_pass, &pass))
 		ok = 1;
-	else
+	else if (socks5_auth_prog)
 		ok = autenticate(fd, &user, &pass) < 0 ? 0 : 1;
 out:
 	buf[0] = 1;
@@ -673,7 +671,7 @@ int main(int argc, char *argv[])
 	addr = argc > 2 ? argv[2] : ADDR;
 	port = argc > 3 ? argv[3] : PORT;
 
-	if (argc > 3) {
+	if (argc > 4) {
 		if (access(argv[4], X_OK) < 0)
 			ERRX(EXIT_FAILURE, "%s does not exist or "
 					   "isn't executable", argv[4]);
