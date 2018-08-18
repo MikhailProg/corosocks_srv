@@ -40,15 +40,16 @@ BEGIN {
 	ok   = 0
 	
 	while (getline > 0) {
-		if ($0 ~ /^$/ || $0 ~ /^#/)
+		if ($0 ~ /^ *$/ || $0 ~ /^#/)
 			continue
 		db[$1] = $2
 	}
 
 	if (user in db) {
-		cmd = "echo " pass " | '$md5cmd'"
+		cmd = "printf \"" pass "\" | '$md5cmd'"
 		if (cmd | getline > 0 && db[user] == $1)
 			ok = 1
+		close(cmd)
 	}
 }
 
@@ -58,10 +59,11 @@ END {
 
 # A simple db in here-document.
 # userN -- md5(passN)
+# $ printf 'passN' | md5sum
 
-user1 eeff5809b250d691acf3a8ff8f210bd9
-user2 e83cf18ac2b92787c3f4c20aae5f097e
-user3 b879e7867c53e22d9fbb4cce52984227
+user1 a722c63db8ec8625af6cf71cb8c2d939
+user2 c1572d05424d0ecb2a65ec6a82aeacbf
+user3 3afc79b597f88a72528e864cf81856d2
 
 EOF
 
