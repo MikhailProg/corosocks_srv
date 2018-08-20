@@ -40,7 +40,7 @@ libpassfd.a: libpassfd.a(passfd.o)
 ifdef SILENT
 corosocks_srv.o: CFLAGS += -DSILENT
 endif
-corosocks_srv.o: corosocks_srv.c common.h socks5.h \
+corosocks_srv.o: corosocks_srv.c common.h socks5.h config.h \
 		libloop.a libinet.a libcoro.a libpassfd.a
 
 corosocks_srv: LDLIBS  += -lloop -lcoro -linet -lpassfd
