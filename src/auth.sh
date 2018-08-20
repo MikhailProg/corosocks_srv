@@ -10,18 +10,20 @@
 # means a fail.
 #
 
-# Uncomment the export to debug this script by hand in terminal.
+# Uncomment the export to debug this script in a terminal.
 #export PROXY_USER_IP="127.0.0.1" PROXY_USER="user1" PROXY_PASS="pass1"
-test "$PROXY_USER_IP" -a "$PROXY_USER" -a "$PROXY_PASS" || exit 1
+
+# Uncomment the code below to accept everyone.
+#echo y 
+#exit 0
+
+md5cmd=md5sum
 
 if [ "$(uname -s)" = "Darwin" ]; then
 	md5cmd=md5
-else
-	md5cmd=md5sum
 fi
 
 cat << EOF | awk '
-
 function passed()
 {
 	print "y"
@@ -40,7 +42,7 @@ BEGIN {
 	ok   = 0
 	
 	while (getline > 0) {
-		if ($0 ~ /^ *$/ || $0 ~ /^#/)
+		if ($0 ~ /^ *$/ || $0 ~ /^ *#/)
 			continue
 		db[$1] = $2
 	}

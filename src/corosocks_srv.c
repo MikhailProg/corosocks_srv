@@ -22,13 +22,9 @@
 #include "coroutine.h"
 #include "passfd.h"
 #include "common.h"
+#include "config.h"
 
 #define CONNECT_TIMEOUT	5000
-#define ADDR		"0.0.0.0"
-#define PORT		"1080"
-#define PROXY_USER_IP	"PROXY_USER_IP"
-#define PROXY_USER	"PROXY_USER"
-#define PROXY_PASS	"PROXY_PASS"
 
 #define STRINIT(s, a1, a2)      ((s)->p = (a1), (s)->n = (a2))
 #define STREQU(s1, s2)          ((s1)->n == (s2)->n && \
@@ -55,12 +51,20 @@ static Str	socks5_pass;
 static char	**socks5_auth_prog;
 static int	(*socks5_auth_methods[256])(Fd);
 
+static int fd_cloexec(Fd fd)
+{
+	int flags;
+	return ((flags = fcntl(fd, F_GETFD)) < 0 ||
+			fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0) ? -1 : 0;
+}
+
+/* All fds in the program are nonblocked, also set CLOEXEC here. */
 static int fd_nonblock(Fd fd)
 {
-	int flags = fcntl(fd, F_GETFL);
-	if (flags < 0)
-		return -1;
-	return fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0 ? -1 : 0;
+	int flags;
+	return ((flags = fcntl(fd, F_GETFL)) < 0 ||
+			fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0 ||
+				fd_cloexec(fd) < 0) ? -1 : 0;
 }
 
 static void loop_handler(Fd fd, LoopEvent event, void *opaque)
@@ -99,12 +103,6 @@ static ssize_t coro_recv(int fd, void *buf, size_t len, int flags)
 	return coro_io(recv, LOOP_RD, fd, buf, len, flags);
 }
 
-static ssize_t coro_read(int fd, void *buf, size_t len)
-{
-	return coro_io((ssize_t (*)(int, void *, size_t, int))read,
-			LOOP_RD, fd, buf, len, 0);
-}
-
 static int coro_accept(int fd, struct sockaddr *addr, socklen_t *addrlen)
 {
 	int afd;
@@ -122,7 +120,7 @@ static int coro_accept(int fd, struct sockaddr *addr, socklen_t *addrlen)
 	return afd;
 }
 
-static int chld_run(void (*run)(Fd fd, void *opaque), void *opaque)
+static Fd chld_run(void (*run)(Fd fd, void *opaque), void *opaque)
 {
 	sigset_t mask, omask;
 	struct rlimit rlim;
@@ -221,11 +219,13 @@ static void connector(Fd un, void *opaque)
 	_exit(rc);
 }
 
-static int connect_async(const char *host, const char *port)
+static int coro_connect(const char *host, const char *port)
 {
 	ConnectOpt opt = { host, port };
-	int un;
+	int fd, un;
 
+	/* Since a host may point to DNS name we connect in a child process,
+	 * so a resolver will not block the server. */
 	if ((un = chld_run(connector, &opt)) < 0)
 		return -1;
 
@@ -233,16 +233,6 @@ static int connect_async(const char *host, const char *port)
 		close(un);
 		return -1;
 	}
-
-	return un;
-}
-
-static int coro_connect(const char *host, const char *port)
-{
-        int fd, un;
-
-	if ((un = connect_async(host, port)) < 0)
-		return -1;
 
 	while ((fd = recv_fd(un)) < 0) {
 		if (!SOFT_ERROR) {
@@ -335,7 +325,8 @@ static int autenticate(Fd fd, const Str *u, const Str *p)
 		return -1;
 	}
 	/* Expect "y" as a success result. */
-	if (coro_read(un, res, sizeof(res)) == 2) {
+	if (coro_recv(un, res, sizeof(res), 0) == 2 &&
+	    (res[1] == '\n' || res[1] == '\0')) {
 		res[1] = '\0';
 		if (strcmp(res, "y") == 0)
 			ok = 1;
@@ -353,36 +344,46 @@ static int socks5_auth_noauth(Fd fd)
 
 static int socks5_auth_username(Fd fd)
 {
-	/* ver 1 byte | ulen 1 byte | user | plen 1 byte | pass */
-	unsigned char buf[513];
+	/* ver 1 byte | ulen 1 byte | user | plen 1 byte | pass. Max 513 bytes. */
+	unsigned char buf[513], *p = buf;
+	size_t ulen, plen, n = 0;
 	Str user, pass;
-	size_t ulen, plen;
-	ssize_t n;
+	ssize_t m;
 	int ok = 0;
 
-	if ((n = coro_recv(fd, buf, sizeof(buf), 0)) < 0)
-		return -1;
-	/* Sanity checks. */
-	if (n < 5 || buf[0] != 1)
-		goto out;
-	n -= 3;
-	if (!(ulen = buf[1]) || ulen >= (size_t)n)
-		goto out;
-	n -= ulen;
-	if (!(plen = buf[2+ulen]) || plen > (size_t)n)
-		goto out;
+	for (;;) {
+		if ((m = coro_recv(fd, buf+n, sizeof(buf)-n, 0)) <= 0)
+			return -1;
+		n += m;
+		if (n > 1 && p[0] != 1)
+			return -1;
+		/* Partial read. */
+		if (n < 2)
+			continue;
+		if ((ulen = p[1]) == 0)
+			return -1;
+		/* Partial read. */
+		if (n < 2 + ulen + 1)
+			continue;
+		if ((plen = p[2+ulen]) == 0 || n > (2 + ulen + 1 + plen))
+			return -1;
+		/* Partial read. */
+		if (n < 2 + ulen + 1 + plen)
+			continue;
+		else
+			break;
+	}
 
-	STRINIT(&user, (char *)&buf[2], ulen);
-	STRINIT(&pass, (char *)&buf[2+ulen+1], plen);
+	STRINIT(&user, (char *)&p[2], ulen);
+	STRINIT(&pass, (char *)&p[2+ulen+1], plen);
 
 	if (STREQU(&socks5_user, &user) && STREQU(&socks5_pass, &pass))
 		ok = 1;
 	else if (socks5_auth_prog)
 		ok = autenticate(fd, &user, &pass) < 0 ? 0 : 1;
-out:
+
 	buf[0] = 1;
 	buf[1] = ok ? 0 : 1;
-
 	if (coro_send_all(fd, buf, 2, 0) < 0)
 		return -1;
 
@@ -391,22 +392,34 @@ out:
 
 static int socks5_negotiate(Fd fd)
 {
-	unsigned char buf[1024], *p = buf;
-	unsigned int n = 0, i;
-	ssize_t len;
+	/* ver 1 byte | nmethods 1 byte | nmethods bytes. Max 257 bytes.*/
+	unsigned char buf[257], *p = buf;
+	size_t i, nmeth, n = 0;
+	ssize_t m;
 	int ok;
 
-	len = coro_recv(fd, buf, sizeof(buf), 0);
-	if (len < 0 || len < 2)
-		return -1;
-	/* ver 1 byte | nmethods 1 byte | nmethods bytes */
-	if (p[0] != SOCKS5 || (n = p[1]) == 0 || len != n + 2)
-		return -1;
+	for (;;) {
+		if ((m = coro_recv(fd, buf+n, sizeof(buf)-n, 0)) <= 0)
+			return -1;
+		n += m;
+		nmeth = 0;
+		/* Sanity checks. */
+		if ((n > 0 && p[0] != SOCKS5) ||
+		    (n > 1 && ((nmeth = p[1]) == 0 || n > nmeth + 2)))
+			return -1;
+		/* Partial read. */
+		if (n < nmeth + 2)
+			continue;
+		else
+			break;
+	}
+
 	p += 2;
-	for (i = 0; i < n; i++)
+	for (i = 0; i < nmeth; i++)
 		if (p[i] == socks5_auth_type)
 			break;
-	ok = i != n;
+	ok = i != nmeth;
+
 	buf[0] = SOCKS5;
 	buf[1] = ok ? socks5_auth_type : SOCKS5_AUTH_NOMETHOD;
 	if (coro_send_all(fd, buf, 2, 0) < 0)
@@ -422,7 +435,8 @@ static int socks5_reply(Fd fd, unsigned char rc)
 	socklen_t slen = sizeof(sin);
 	unsigned char buf[16];
 
-	getsockname(fd, (struct sockaddr *)&sin, &slen);
+	if (getsockname(fd, (struct sockaddr *)&sin, &slen) < 0)
+		return -1;
 	buf[0] = SOCKS5;
 	buf[1] = rc;
 	buf[2] = 0;
@@ -433,51 +447,61 @@ static int socks5_reply(Fd fd, unsigned char rc)
 	return coro_send_all(fd, buf, 10, 0) < 0 ? -1 : 0;
 }
 
-static int socks5_request(Fd fd)
+static Fd socks5_request(Fd fd)
 {
-	unsigned char buf[1024], *p = buf, rc;
-	unsigned int m, n, atype;
+	/* ver 1 byte | cmd 1 byte | rsv 1 byte | atype 1 byte | ... | port 2 bytes
+	 * SOCKS5_ATYP_NAME 1 byte len + 255 FQDN: Max 262 bytes. */
+	unsigned char buf[262], *p = buf, rc;
+	size_t n = 0, alen, len;
 	struct in_addr addr;
-	char sport[16];
+	char *host, sport[16];
+	int atype, cfd;
 	uint16_t port;
-	char *host;
-	ssize_t len;
-	int cfd;
+	ssize_t m;
 
-	len = coro_recv(fd, buf, sizeof(buf), 0);
-	if (len < 0 || len < 5)
-		return -1;
-	/* ver 1 byte | cmd 1 byte | rsv 1 byte | atype 1 byte | ... */
+	for (;;) {
+		if ((m = coro_recv(fd, buf+n, sizeof(buf)-n, 0)) <= 0)
+			return -1;
+		n += m;
+		/* Sanity checks. */
 #define CHECK_CMD(v)	((v) == SOCKS5_CMD_CONNECT)
 #define CHECK_ATYPE(v)	((v) == SOCKS5_ATYP_IPV4 || (v) == SOCKS5_ATYP_NAME)
-	if (p[0] != SOCKS5 || !CHECK_CMD(p[1]) ||
-	    p[2] != 0 || !CHECK_ATYPE(p[3]))
-		return -1;
+		if ((n > 0 && p[0] != SOCKS5) ||
+		    (n > 1 && !CHECK_CMD(p[1])) ||
+		    (n > 2 && p[2] != 0) ||
+		    (n > 3 && !CHECK_ATYPE(p[3])))
+			return -1;
 #undef CHECK_ATYPE
 #undef CHECK_CMD
-	atype = p[3];
-	m = p[4];
-	n = 4 + (atype == SOCKS5_ATYP_IPV4 ? 6 : m + 1 + 2);
-	if (len != n)
-		return -1;
+		/* Partial read. */
+		if (n < 5)
+			continue;
+		atype = p[3];
+		alen  = p[4]; /* only for SOCKS5_ATYP_NAME */
+		len = 4 + (atype == SOCKS5_ATYP_IPV4 ? 6 : 1 + alen + 2);
+		/* Partial read. */
+		if (n < len)
+			continue;
+		else if (n > len)
+			return -1;
+		else
+			break;
+	}
 
 	if (atype == SOCKS5_ATYP_IPV4) {
 		memcpy(&port, p + 8, 2);
 		memcpy(&addr.s_addr, p + 4, sizeof(in_addr_t));
 		host = inet_ntoa(addr);
 	} else {
+		memcpy(&port, p + 5 + alen, 2);
 		host = (char *)p + 5;
-		memcpy(&port, host + m, 2);
-		host[m] = '\0';
+		host[alen] = '\0';
 	}
 
 	port = ntohs(port);
 	WARNX("fd=%d, req connect: %s:%u", fd, host, port);
 	snprintf(sport, sizeof(sport), "%d", port);
 
-	/* In case SOCKS5_ATYP_NAME it takes time to resolve
-	 * the address then srv will be blocked, so we do connection
-	 * in the child process and then receive FD via cmsg. */
 	cfd = coro_connect(host, sport);
 	rc = cfd != -1 ? SOCKS5_REP_SUCCESS : SOCKS5_REP_UNKNOWN;
 	if (socks5_reply(fd, rc) < 0) {
@@ -540,7 +564,9 @@ static void socks5_entry(void *opaque)
 		(fds[0][1] = cfd = socks5_request(afd)) < 0 ||
 			(fds[1][0] = dup(cfd)) < 0 ||
 	    		(fds[1][1] = dup(afd)) < 0 ||
-				!(co = coroutine_create(0, rdwr_loop, fds[1]))) {
+				fd_cloexec(fds[1][0]) < 0 ||
+				fd_cloexec(fds[1][1]) < 0 ||
+			!(co = coroutine_create(0, rdwr_loop, fds[1]))) {
 		fds_fini(fds[0], fds[1]);
 		return;
 	}
@@ -640,7 +666,7 @@ static void usage(void)
 		"\n"
 		"    bind_addr : %s\n"
 		"    bind_port : %s\n"
-		"\n", __progname, ADDR, PORT);
+		"\n", __progname, PROXY_ADDR, PROXY_PORT);
 	exit(EXIT_FAILURE);
 }
 
@@ -668,8 +694,8 @@ int main(int argc, char *argv[])
 			  !strcmp(argv[1], "epoll")  ? LOOP_DRV_EPOLL :
 #endif
 				LOOP_DRV_DEFAULT : LOOP_DRV_DEFAULT;
-	addr = argc > 2 ? argv[2] : ADDR;
-	port = argc > 3 ? argv[3] : PORT;
+	addr = argc > 2 ? argv[2] : PROXY_ADDR;
+	port = argc > 3 ? argv[3] : PROXY_PORT;
 
 	if (argc > 4) {
 		if (access(argv[4], X_OK) < 0)
