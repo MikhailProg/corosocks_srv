@@ -83,7 +83,7 @@ $ docker run -d -p 1080:1080 --name corosocks mikhailprog/corosocks_srv
 
 With authorization daemonized.
 ```
-$ docker run -d -p 1080:1080 -e PROXY_USER='user' -e PROXY_PASSWD='passwd' --name corosocks mikhailprog/corosocks_srv:latest
+$ docker run -d -p 1080:1080 -e PROXY_USER='user' -e PROXY_PASS='passwd' --name corosocks mikhailprog/corosocks_srv:latest
 ```
 
 To stop daemonized container.
