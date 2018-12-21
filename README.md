@@ -44,12 +44,12 @@ Set 127.0.0.1:1080 as the SOCKS5 server in your browser (e.g Firefox).
 Run a server with username/password authentication.
 
 ```
-$ PROXY_USER=user PROXY_PASSWD=passwd ./corosocks_srv poll 0.0.0.0 1080
+$ PROXY_USER=user PROXY_PASS=passwd ./corosocks_srv poll 0.0.0.0 1080
 ```
 
 Run a server with username/password authentication but deligate a check to an external program (check auth.sh for more information):
 ```
-$ PROXY_USER="" PROXY_PASSWD="" ./corosocks_srv poll 0.0.0.0 1080 ./auth.sh
+$ PROXY_USER="" PROXY_PASS="" ./corosocks_srv poll 0.0.0.0 1080 ./auth.sh
 ```
 
 Run as a daemon (setsid is available only in Linux):
@@ -83,7 +83,7 @@ $ docker run -d -p 1080:1080 --name corosocks mikhailprog/corosocks_srv
 
 With authorization daemonized.
 ```
-$ docker run -d -p 1080:1080 -e PROXY_USER='user' -e PROXY_PASSWD='passwd' --name corosocks mikhailprog/corosocks_srv:latest
+$ docker run -d -p 1080:1080 -e PROXY_USER='user' -e PROXY_PASS='passwd' --name corosocks mikhailprog/corosocks_srv:latest
 ```
 
 To stop daemonized container.
