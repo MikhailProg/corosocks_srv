@@ -24,7 +24,10 @@
 #include "common.h"
 #include "config.h"
 
-#define CONNECT_TIMEOUT	5000
+#ifndef COROUTINE_CACHE_MAX
+#  define COROUTINE_CACHE_MAX	64lu
+#endif
+#define CONNECT_TIMEOUT		5000
 
 #define STRINIT(s, a1, a2)      ((s)->p = (a1), (s)->n = (a2))
 #define STREQU(s1, s2)          ((s1)->n == (s2)->n && \
@@ -45,11 +48,13 @@ typedef struct {
 	const char	*port;
 } ConnectOpt;
 
-static int	socks5_auth_type;
-static Str	socks5_user;
-static Str	socks5_pass;
-static char	**socks5_auth_prog;
-static int	(*socks5_auth_methods[256])(Fd);
+static Coroutine	*coroutine_cache[COROUTINE_CACHE_MAX];
+static size_t		coroutine_cache_size;
+static int		socks5_auth_type;
+static Str		socks5_user;
+static Str		socks5_pass;
+static char		**socks5_auth_prog;
+static int		(*socks5_auth_methods[256])(Fd);
 
 static int fd_cloexec(Fd fd)
 {
@@ -527,6 +532,44 @@ static void fds_fini(int fds0[2], int fds1[2])
 	}
 }
 
+/* Implement a simple coroutine cache. */
+static Coroutine *
+coroutine_create_cached(size_t stacksz, void (*entry)(void *), void *opaque)
+{
+	Coroutine *co;
+
+	if (coroutine_cache_size) {
+		co = coroutine_cache[--coroutine_cache_size];
+		coroutine_init(co, entry, opaque);
+	} else {
+		co = coroutine_create(stacksz, entry, opaque);
+	}
+
+	return co;
+}
+
+static int check_cache(Coroutine *co)
+{
+	int release = 1;
+	/* If there is enough space then put a coroutine to the cache. */
+	if (coroutine_cache_size < COROUTINE_CACHE_MAX) {
+		coroutine_cache[coroutine_cache_size++] = co;
+		release = 0;
+	}
+	return release;
+}
+
+static void coroutine_cache_destroy(void)
+{
+	size_t i;
+
+	for (i = 0; i < coroutine_cache_size; i++) {
+		coroutine_on_destroy(coroutine_cache[i], NULL);
+		coroutine_destroy(&coroutine_cache[i]);	
+	}
+	coroutine_cache_size = 0;
+}
+
 static void rdwr_loop(void *opaque)
 {
 	unsigned char buf[65536];
@@ -566,7 +609,7 @@ static void socks5_entry(void *opaque)
 	    		(fds[1][1] = dup(afd)) < 0 ||
 				fd_cloexec(fds[1][0]) < 0 ||
 				fd_cloexec(fds[1][1]) < 0 ||
-			!(co = coroutine_create(0, rdwr_loop, fds[1]))) {
+			!(co = coroutine_create_cached(0, rdwr_loop, fds[1]))) {
 		fds_fini(fds[0], fds[1]);
 		return;
 	}
@@ -574,6 +617,7 @@ static void socks5_entry(void *opaque)
 	WARNX("RDWR: fd=%d -> fd=%d, fd=%d -> fd=%d",
 			fds[0][0], fds[0][1], fds[1][0], fds[1][1]);
 
+	coroutine_on_destroy(co, check_cache);
 	coroutine_detach(co);
 	coroutine_resume(co);
 	rdwr_loop(fds[0]);
@@ -602,13 +646,15 @@ static void srv_loop(void *opaque)
 		}
 
 		WARNX("accepted fd=%d", afd);
-		co = coroutine_create(0, socks5_entry, (void *)(intptr_t)afd);
+		co = coroutine_create_cached(0, socks5_entry,
+						(void *)(intptr_t)afd);
 		if (!co) {
 			WARNX("coroutine_create() failed");
 			close(afd);
 			continue;
 		}
 
+		coroutine_on_destroy(co, check_cache);
 		coroutine_detach(co);
 		coroutine_resume(co);
 	}
@@ -728,6 +774,7 @@ int main(int argc, char *argv[])
 
 	loop_run();
 
+	coroutine_cache_destroy();
 	coroutine_destroy(&srv);
 	loop_fini();
 	close(fd);

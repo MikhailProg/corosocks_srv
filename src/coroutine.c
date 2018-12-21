@@ -21,6 +21,7 @@ struct Coroutine {
 	void		*resume;
 	void		*sp;
 	Coroutine	*callee;
+	int		(*on_destroy)(Coroutine *co);
 };
 
 static Coroutine coro_main, *current = &coro_main;
@@ -46,8 +47,10 @@ static void coroutine_start(Coroutine *co)
 	if (sigsetjmp(co->env, 0) == 0)
 		siglongjmp(co->callee->env, 1);
 
-	co->entry(co->opaque);
-	yield(co, TERMINATED, NULL);
+	for (;;) {
+		co->entry(co->opaque);
+		yield(co, TERMINATED, NULL);
+	}
 }
 
 static void sigusr1(int signo)
@@ -161,6 +164,14 @@ coroutine_create(size_t _stacksz, void (*entry)(void *), void *opaque)
 	return co;
 }
 
+void coroutine_init(Coroutine *co, void (*entry)(void *), void *opaque)
+{
+	assert(co->state & TERMINATED);
+	co->state  = YIELDED;
+	co->entry  = entry;
+	co->opaque = opaque;
+}
+
 Coroutine *coroutine_self(void)
 {
 	return current;
@@ -171,10 +182,22 @@ void coroutine_detach(Coroutine *co)
 	co->state |= DETACHED;
 }
 
+void coroutine_on_destroy(Coroutine *co, int (*on_destroy)(Coroutine *))
+{
+	co->on_destroy = on_destroy;
+}
+
 void coroutine_destroy(Coroutine **co)
 {
-	free((*co)->sp);
-	free((*co));
+	int release = 1;
+
+	if ((*co)->on_destroy)
+		release = (*co)->on_destroy(*co);
+
+	if (release) {
+		free((*co)->sp);
+		free((*co));
+	}
 	*co = NULL;
 }
 
