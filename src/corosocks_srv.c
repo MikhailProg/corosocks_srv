@@ -745,8 +745,7 @@ int main(int argc, char *argv[])
 
 	if (argc > 4) {
 		if (access(argv[4], X_OK) < 0)
-			ERRX(EXIT_FAILURE, "%s does not exist or "
-					   "isn't executable", argv[4]);
+			ERRX("%s does not exist or isn't executable", argv[4]);
 		socks5_auth_prog = &argv[4];
 	}
 
@@ -760,11 +759,11 @@ int main(int argc, char *argv[])
 	sigaction(SIGCHLD, &sa, NULL);
 
 	if ((fd = tcp_listen(addr, port)) < 0)
-		ERR(EXIT_FAILURE, "tcp_listen() failed");
+		ERR("tcp_listen() failed");
 	if (fd_nonblock(fd) < 0)
-		ERR(EXIT_FAILURE, "fd_nonblock() failed");
+		ERR("fd_nonblock() failed");
 	if (loop_init(drv) < 0)
-		ERRX(EXIT_FAILURE, "loop_init() failed");
+		ERRX("loop_init() failed");
 
 	socks5_auth_init();
 	stdxyz_init();

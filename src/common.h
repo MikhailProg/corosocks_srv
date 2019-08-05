@@ -1,6 +1,7 @@
 #ifndef COMMON_H
 #define COMMON_H
 
+#include <stdlib.h>
 #include <errno.h>
 #include <err.h>
 
@@ -19,7 +20,7 @@
 #  define WARN(...)	do {} while (0)
 #  define WARNX(...)	do {} while (0)
 #endif
-#define ERR(...)	err(__VA_ARGS__)
-#define ERRX(...)	errx(__VA_ARGS__)
+#define ERR(...)	err(EXIT_FAILURE, __VA_ARGS__)
+#define ERRX(...)	errx(EXIT_FAILURE, __VA_ARGS__)
 
 #endif /* COMMON_H */
