@@ -369,7 +369,7 @@ static void *epoll_init(void)
 static void epoll_set(LoopDrvCtx *c, Fd fd, LoopEvent events)
 {
 	EPollCtx *ctx = (EPollCtx *)c;
-	EPollEvent e;
+	EPollEvent e = { 0 };
 	int n, op, rc;
 
 	assert(events);
