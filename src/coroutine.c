@@ -13,23 +13,24 @@
 #define	YIELDED		0x04
 #define TERMINATED	0x08
 
-struct Coroutine {
-	int		state;
+#define CORO_BASE(co)	((Coroutine *)co)
+#define CORO_IMPL(co)	((CoroutineImpl *)co)
+
+typedef struct CoroutineImpl CoroutineImpl;
+
+struct CoroutineImpl {
+	Coroutine	base;
 	sigjmp_buf	env;
-	void		(*entry)(void *opaque);
-	void		*opaque;
-	void		*resume;
 	void		*sp;
-	Coroutine	*callee;
-	int		(*on_destroy)(Coroutine *co);
+	CoroutineImpl	*callee;
 };
 
-static Coroutine coro_main, *current = &coro_main;
+static CoroutineImpl coro_main, *current = &coro_main;
 
-static void yield(Coroutine *co, int state, void *resume)
+static void yield(CoroutineImpl *co, int state, void *resume)
 {
-	co->resume = resume;
-	co->state  = state | (co->state & DETACHED);
+	CORO_BASE(co)->resume = resume;
+	CORO_BASE(co)->state = state | (CORO_BASE(co)->state & DETACHED);
 	
 	if (sigsetjmp(current->env, 0) == 0)
 		siglongjmp(current->callee->env, 1);
@@ -38,17 +39,17 @@ static void yield(Coroutine *co, int state, void *resume)
 void coroutine_yield(void *resume)
 {
 	assert(current != &coro_main);
-	assert(current->state & RUNNING);
+	assert(CORO_BASE(current)->state & RUNNING);
 	yield(current, YIELDED, resume);
 }
 
-static void coroutine_start(Coroutine *co)
+static void coroutine_start(CoroutineImpl *co)
 {
 	if (sigsetjmp(co->env, 0) == 0)
 		siglongjmp(co->callee->env, 1);
 
 	for (;;) {
-		co->entry(co->opaque);
+		CORO_BASE(co)->entry(CORO_BASE(co)->opaque);
 		yield(co, TERMINATED, NULL);
 	}
 }
@@ -62,6 +63,7 @@ static void sigusr1(int signo)
 	coroutine_start(current);
 }
 
+
 void *coroutine_resume(Coroutine *co)
 {
 	void *resume = co->resume;
@@ -71,14 +73,14 @@ void *coroutine_resume(Coroutine *co)
 
 	assert(co->state & YIELDED);
 
-	co->state  = RUNNING | (co->state & DETACHED);
-	co->callee = current;
-	current    = co;
-	if (sigsetjmp(co->callee->env, 0) == 0)
-		siglongjmp(co->env, 1);	
-	resume     = co->resume;
-	current    = co->callee;
-	co->callee = NULL;
+	co->state = RUNNING | (co->state & DETACHED);
+	CORO_IMPL(co)->callee = current;
+	current = CORO_IMPL(co);
+	if (sigsetjmp(CORO_IMPL(co)->callee->env, 0) == 0)
+		siglongjmp(CORO_IMPL(co)->env, 1);
+	resume = co->resume;
+	current = CORO_IMPL(co)->callee;
+	CORO_IMPL(co)->callee = NULL;
 
 	if ((co->state & TERMINATED) && (co->state & DETACHED))
 		coroutine_destroy(&co);
@@ -89,7 +91,7 @@ out:
 Coroutine *
 coroutine_create(size_t _stacksz, void (*entry)(void *), void *opaque)
 {
-	Coroutine *co;
+	CoroutineImpl *co;
 	struct sigaction sa, osa;
 	stack_t stack, ostack;
 	sigset_t mask, omask;
@@ -100,10 +102,11 @@ coroutine_create(size_t _stacksz, void (*entry)(void *), void *opaque)
 		return NULL;
 
 	memset(co, 0, sizeof(*co));
-	co->state  = YIELDED;
-	co->entry  = entry;
-	co->opaque = opaque;
-	co->sp     = malloc(stacksz);
+	CORO_BASE(co)->state = YIELDED;
+	CORO_BASE(co)->entry = entry;
+	CORO_BASE(co)->opaque = opaque;
+
+	co->sp = malloc(stacksz);
 	if (!co->sp) {
 		free(co);
 		return NULL;
@@ -113,8 +116,8 @@ coroutine_create(size_t _stacksz, void (*entry)(void *), void *opaque)
 	sigaddset(&mask, SIGUSR1);
 	sigprocmask(SIG_BLOCK, &mask, &omask);
 
-	stack.ss_sp    = co->sp;
-	stack.ss_size  = stacksz;
+	stack.ss_sp = co->sp;
+	stack.ss_size = stacksz;
 	stack.ss_flags = 0;
 	if (sigaltstack(&stack, &ostack) < 0) {
 		free(co->sp);
@@ -127,7 +130,7 @@ coroutine_create(size_t _stacksz, void (*entry)(void *), void *opaque)
 	memset(&sa, 0, sizeof(sa));
 	sigfillset(&sa.sa_mask);
 	sa.sa_handler = sigusr1;
-	sa.sa_flags   = SA_ONSTACK;
+	sa.sa_flags = SA_ONSTACK;
 	sigaction(SIGUSR1, &sa, &osa);
 	
 	raise(SIGUSR1);
@@ -136,9 +139,9 @@ coroutine_create(size_t _stacksz, void (*entry)(void *), void *opaque)
 	/* Allow only SIGUSR1 for a while, let the handler save
 	 * the execution environment with sigsetjmp in sigusr1(). */
 	co->callee = current;
-	current    = co;
+	current = co;
 	sigsuspend(&mask);
-	current    = co->callee;
+	current = co->callee;
 	co->callee = NULL;
 	/* Disable the alternative stack and restore the old stack
 	 * if it was active. */	
@@ -154,27 +157,26 @@ coroutine_create(size_t _stacksz, void (*entry)(void *), void *opaque)
 	sigprocmask(SIG_SETMASK, &omask, NULL);
 
 	co->callee = current;
-	current    = co;
+	current = co;
 	/* Jump back to sigusr1() but this time not in the signal context. */
 	if (sigsetjmp(co->callee->env, 0) == 0)
 		siglongjmp(co->env, 1);
-	current    = co->callee;
+	current = co->callee;
 	co->callee = NULL;
 
-	return co;
+	return CORO_BASE(co);
 }
 
 void coroutine_init(Coroutine *co, void (*entry)(void *), void *opaque)
 {
-	assert(co->state & TERMINATED);
-	co->state  = YIELDED;
-	co->entry  = entry;
+	co->state = YIELDED;
+	co->entry = entry;
 	co->opaque = opaque;
 }
 
 Coroutine *coroutine_self(void)
 {
-	return current;
+	return CORO_BASE(current);
 }
 
 void coroutine_detach(Coroutine *co)
@@ -195,7 +197,7 @@ void coroutine_destroy(Coroutine **co)
 		release = (*co)->on_destroy(*co);
 
 	if (release) {
-		free((*co)->sp);
+		free(CORO_IMPL((*co))->sp);
 		free((*co));
 	}
 	*co = NULL;

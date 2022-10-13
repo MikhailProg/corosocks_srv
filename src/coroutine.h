@@ -7,6 +7,14 @@
 
 typedef struct Coroutine Coroutine;
 
+struct Coroutine {
+	void		(*entry)(void *opaque);
+	void		*opaque;
+	int		state;
+	void		*resume;
+	int		(*on_destroy)(Coroutine *co);
+};
+
 /* Create a coroutine with the entry point and the opaque argument. */
 Coroutine *
 coroutine_create(size_t stacksz, void (*entry)(void *), void *opaque);
