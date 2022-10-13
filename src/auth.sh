@@ -35,27 +35,32 @@ function failed()
 	exit 1
 }
 
+function md5(pass,		cmd, hash)
+{
+	cmd = "printf \"" pass "\" | '$md5cmd'"
+
+	if (cmd | getline > 0)
+		hash = $1
+	close(cmd)
+
+	return hash
+}
+
 BEGIN {
 	ip   = ENVIRON["PROXY_USER_IP"]
 	user = ENVIRON["PROXY_USER"]
-	pass = ENVIRON["PROXY_PASS"]
+	hash = md5(ENVIRON["PROXY_PASS"])
 	ok   = 0
-	
+
 	while (getline > 0) {
 		if ($0 ~ /^ *$/ || $0 ~ /^ *#/)
 			continue
-		db[$1] = $2
-	}
-
-	if (user in db) {
-		cmd = "printf \"" pass "\" | '$md5cmd'"
-		if (cmd | getline > 0 && db[user] == $1)
+		if (user == $1 && hash == $2) {
 			ok = 1
-		close(cmd)
+			break
+		}
 	}
-}
 
-END {
 	ok ? passed() : failed()
 }'
 
