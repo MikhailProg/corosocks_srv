@@ -4,7 +4,7 @@
 
 A small SOCKS5 server based on coroutines. The server uses coroutine and event libraries to emulate blocking IO. The server supports only CONNECT command.
 
-This implementation shows how to write the code in a blocking style but use nonblocking calls without callbacks. Also the server use some advanced UNIX features to connect to the requested host. The server resolves the requested host in a child process (name resolution can block the process), connects to the resolved address and then passes the socket fd back to the parent (check passfd.c), everything is done within a cororoutine.
+This implementation shows how to write the code in a blocking style but use nonblocking calls without callbacks. The server use some advanced UNIX features to connect to the requested host. The server resolves the requested host in a child process (name resolution can block the process), connects to the resolved address and then passes the socket fd back to the parent (check passfd.c), everything is done within a cororoutine. Also the server provides the flexible mechanism to autorize users with an external program which can implements any scheme (check sample auth.sh). 
 
 ## Build
 
