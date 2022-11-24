@@ -1,4 +1,3 @@
-[![Docker Build](https://img.shields.io/docker/build/mikhailprog/corosocks_srv.svg?maxAge=604800)](https://hub.docker.com/r/mikhailprog/corosocks_srv)
 
 # SOCKS5 server (use coroutines)
 
