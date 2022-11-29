@@ -713,10 +713,23 @@ static void usage(void)
 	exit(EXIT_FAILURE);
 }
 
+static void sigs_init()
+{
+	struct sigaction sa;
+
+	memset(&sa, 0, sizeof(sa));
+	sigfillset(&sa.sa_mask);
+	sa.sa_handler = sigall;
+
+	signal(SIGPIPE, SIG_IGN);
+	sigaction(SIGINT, &sa, NULL);
+	sigaction(SIGTERM, &sa, NULL);
+	sigaction(SIGCHLD, &sa, NULL);
+}
+
 int main(int argc, char *argv[])
 {
 	char *addr, *port;
-	struct sigaction sa;
 	struct rlimit rlim;
 	LoopDrvType drv;
 	Coroutine *srv;
@@ -746,14 +759,7 @@ int main(int argc, char *argv[])
 		socks5_auth_prog = &argv[4];
 	}
 
-	memset(&sa, 0, sizeof(sa));
-	sigfillset(&sa.sa_mask);
-	sa.sa_handler = sigall;
-
-	signal(SIGPIPE, SIG_IGN);
-	sigaction(SIGINT, &sa, NULL);
-	sigaction(SIGTERM, &sa, NULL);
-	sigaction(SIGCHLD, &sa, NULL);
+	sigs_init();
 
 	if ((fd = tcp_listen(addr, port)) < 0)
 		ERR("tcp_listen() failed");
