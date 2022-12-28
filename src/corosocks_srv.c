@@ -689,10 +689,14 @@ static void stdxyz_init(void)
 
 static void sigall(int signo)
 {
+	int save_errno = errno;
+	
 	if (signo == SIGCHLD)
 		while (waitpid(-1, NULL, WNOHANG) > 0) ;
 	else
 		loop_quit();
+	
+	errno = save_errno;
 }
 
 static void usage(void)
