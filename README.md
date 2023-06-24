@@ -51,6 +51,11 @@ Run a server with username/password authentication but deligate a check to an ex
 $ PROXY_USER="" PROXY_PASS="" ./corosocks_srv poll 0.0.0.0 1080 ./auth.sh
 ```
 
+Run a server with several workers, 3 more workers will be spawned (+1 for working main):
+```
+$ PREFORK=4 ./corosocks_srv poll 0.0.0.0 1080 ./auth.sh
+```
+
 Run as a daemon (setsid is available only in Linux):
 
 ```

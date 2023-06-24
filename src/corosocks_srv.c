@@ -731,6 +731,22 @@ static void sigs_init()
 	sigaction(SIGCHLD, &sa, NULL);
 }
 
+static void prefork_init()
+{
+	char *prefork = getenv("PREFORK");
+	int i, n;
+
+	if (prefork && (n = atoi(prefork)) > 1) {
+		/* main is already started -1 */
+		for (i = 0; i < n - 1; i++) {
+			pid_t pid = fork();
+			if (!pid)
+				break;
+			WARNX("run worker %d", pid);
+		}
+	}
+}
+
 int main(int argc, char *argv[])
 {
 	char *addr, *port;
@@ -769,6 +785,9 @@ int main(int argc, char *argv[])
 		ERR("tcp_listen() failed");
 	if (fd_nonblock(fd) < 0)
 		ERR("fd_nonblock() failed");
+
+	prefork_init();
+
 	if (loop_init(drv) < 0)
 		ERRX("loop_init() failed");
 
