@@ -91,7 +91,7 @@ out:
 Coroutine *
 coroutine_create(size_t _stacksz, void (*entry)(void *), void *opaque)
 {
-	CoroutineImpl *co;
+	CoroutineImpl *volatile co;
 	struct sigaction sa, osa;
 	stack_t stack, ostack;
 	sigset_t mask, omask;
