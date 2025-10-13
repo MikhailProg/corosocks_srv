@@ -30,7 +30,7 @@ libloop.a: libloop.a(loop.o)
 inet.o: inet.c inet.h
 libinet.a: libinet.a(inet.o)
 
-coroutine.o: CFLAGS += -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -Wno-clobbered
+coroutine.o: CFLAGS += -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0
 coroutine.o: coroutine.c coroutine.h
 libcoro.a: libcoro.a(coroutine.o)
 
